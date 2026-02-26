@@ -1,0 +1,144 @@
+#include "stm32f4xx.h"
+// ==========================
+// 7-segment lookup table (0–9)
+// Each value corresponds to segments a–g
+// ==========================
+uint8_t segCode[10] = {
+0x3F, // 0
+0x06, // 1
+0x5B, // 2
+0x4F, // 3
+0x66, // 4
+0x6D, // 5
+0x7D, // 6
+0x07, // 7
+0x7F, // 8
+0x6F // 9
+};
+// Vote counters (volatile because updated in interrupts)
+volatile uint8_t voteA = 0;
+volatile uint8_t voteB = 0;
+// ==========================
+// Delay function (blocking)
+// Used for button debounce
+// ==========================
+void delay_ms(volatile uint32_t ms)
+{
+for (uint32_t i = 0; i < ms * 4000; i++); // crude delay
+}
+// ==========================
+// Display functions
+// ==========================
+void displayA(uint8_t num)
+{
+GPIOB->ODR = segCode[num]; // Output number on PB0–PB7
+}
+void displayB(uint8_t num)
+{
+GPIOC->ODR = segCode[num]; // Output number on PC0–PC7
+}
+// =======================================================
+// INTERRUPT HANDLERS
+// =======================================================
+// -------- PA0 = RESET BUTTON --------
+void EXTI0_IRQHandler(void)
+{
+// Check if EXTI0 pending flag is 1
+// 1 = interrupt pending (button pressed)
+// 0 = no interrupt pending, skip handler
+if (EXTI->PR & (1 << 0))
+{
+delay_ms(40); // debounce
+// Reset both vote counters
+voteA = 0;
+voteB = 0;
+// Update 7-segment displays
+displayA(0);
+displayB(0);
+// Clear EXTI0 pending flag by writing 1
+EXTI->PR |= (1 << 0);
+}
+}
+// -------- PA1 = VOTE B BUTTON --------
+void EXTI1_IRQHandler(void)
+{
+// Check if EXTI1 pending flag is 1
+if (EXTI->PR & (1 << 1))
+{
+delay_ms(40);
+// Increment B vote if less than 9
+if (voteB < 9)
+voteB++;
+// Update display
+displayB(voteB);
+// Clear pending flag
+EXTI->PR |= (1 << 1);
+}
+}
+// -------- PA4 = VOTE A BUTTON --------
+void EXTI4_IRQHandler(void)
+{
+// Check if EXTI4 pending flag is 1
+if (EXTI->PR & (1 << 4))
+{
+delay_ms(40);
+// Increment A vote if less than 9
+if (voteA < 9)
+voteA++;
+displayA(voteA);
+// Clear pending flag
+EXTI->PR |= (1 << 4);
+}
+}
+// =======================================================
+// MAIN PROGRAM
+// =======================================================
+int main(void)
+{
+// 1. Enable clocks for GPIOA, GPIOB, GPIOC
+RCC->AHB1ENR |= (1<<0) | (1<<1) | (1<<2);
+// Enable SYSCFG clock for EXTI mapping
+RCC->APB2ENR |= (1<<14);
+// 2. Configure BUTTON INPUTS
+// PA0, PA1, PA4 as input (00)
+GPIOA->MODER &= ~(3<<0); // PA0
+GPIOA->MODER &= ~(3<<2); // PA1
+GPIOA->MODER &= ~(3<<8); // PA4
+// Clear pull-up/pull-down
+GPIOA->PUPDR &= ~(3<<0);
+GPIOA->PUPDR &= ~(3<<2);
+GPIOA->PUPDR &= ~(3<<8);
+// Set pull-down resistors (pin stays LOW until pressed)
+GPIOA->PUPDR |= (2<<0);
+GPIOA->PUPDR |= (2<<2);
+GPIOA->PUPDR |= (2<<8);
+// 3. Configure 7-segment OUTPUTS
+// PB0–PB7 as output
+GPIOB->MODER &= ~(0xFFFF);
+GPIOB->MODER |= (0x5555);
+// PC0–PC7 as output
+GPIOC->MODER &= ~(0xFFFF);
+GPIOC->MODER |= (0x5555);
+// Initial display = 0
+displayA(0);
+displayB(0);
+// 4. EXTI CONFIGURATION
+// Map EXTI0–EXTI1 to PA0–PA1
+SYSCFG->EXTICR[0] &= ~((0xF<<0) | (0xF<<4));
+// Map EXTI4 to PA4
+SYSCFG->EXTICR[1] &= ~(0xF<<0);
+// Enable rising-edge trigger (LOW→HIGH when button pressed)
+EXTI->RTSR |= (1<<0) | (1<<1) | (1<<4);
+EXTI->FTSR &= ~((1<<0) | (1<<1) | (1<<4)); // disable falling edge
+// Unmask EXTI lines (enable interrupts)
+EXTI->IMR |= (1<<0) | (1<<1) | (1<<4);
+// Enable NVIC interrupts
+NVIC_EnableIRQ(EXTI0_IRQn);
+NVIC_EnableIRQ(EXTI1_IRQn);
+NVIC_EnableIRQ(EXTI4_IRQn);
+// 5. MAIN LOOP
+while (1)
+{
+// Everything is handled by interrupts
+}
+}
